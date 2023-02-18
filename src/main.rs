@@ -72,13 +72,13 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 SwarmEvent::NewListenAddr { address, .. } => {
                     println!("Listening in {address:?}")
                 },
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(libp2p::identify::Event::Received {peer_id, info})) => {
+                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(libp2p::identify::Event::Received {peer_id, info: _})) => {
                     println!("New node identify.");
                     for address in  swarm.behaviour_mut().addresses_of_peer(&peer_id) {
                         swarm.behaviour_mut().kademlia.add_address(&peer_id, address);
                     }
                 },
-                SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(KademliaEvent::RoutingUpdated { peer, addresses, is_new_peer, bucket_range, old_peer })) => {
+                SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(KademliaEvent::RoutingUpdated { peer, addresses, is_new_peer: _, bucket_range: _, old_peer: _ })) => {
                     println!("RoutingUpdated");
                     swarm.behaviour_mut().identify.push(std::iter::once(peer));
                     println!("{peer:?}");
