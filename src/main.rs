@@ -53,7 +53,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let store = MemoryStore::new(local_peer_id);
         let mut kademlia = Kademlia::new(local_peer_id, store);
 
-        let mut cfg_identify = libp2p::identify::Config::new("a".to_string(), key_copy.public());
+        let mut cfg_identify = libp2p::identify::Config::new("identify version 1".to_string(), key_copy.public());
         let identify = libp2p::identify::Behaviour::new(cfg_identify);
 
         let mut behaviour = MyBehaviour { kademlia, identify };
