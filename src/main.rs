@@ -10,6 +10,9 @@ use libp2p::{
 };
 use std::error::Error;
 
+//Need to be able to run bootstrap.
+const BOOTNODES: &str = "QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt";
+
 #[derive(NetworkBehaviour)]
 #[behaviour(out_event = "MyBehaviourEvent")]
 struct MyBehaviour {
@@ -56,6 +59,11 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut behaviour = MyBehaviour { kademlia, identify };
         Swarm::with_async_std_executor(transport, behaviour, local_peer_id)
     };
+
+    swarm
+        .behaviour_mut()
+        .kademlia
+        .add_address(&BOOTNODES.parse()?, "/dnsaddr/bootstrap.libp2p.io".parse()?);
 
     swarm
         .behaviour_mut()
