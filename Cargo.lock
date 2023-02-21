@@ -3,18 +3,6 @@
 version = 3
 
 [[package]]
-name = "Bootstrap-Node"
-version = "0.1.0"
-dependencies = [
- "async-std",
- "chrono",
- "env_logger",
- "futures",
- "libp2p",
- "tokio",
-]
-
-[[package]]
 name = "adler"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -423,6 +411,18 @@ dependencies = [
  "atomic-waker",
  "fastrand",
  "futures-lite",
+]
+
+[[package]]
+name = "bootstrap-node"
+version = "0.1.0"
+dependencies = [
+ "async-std",
+ "chrono",
+ "env_logger",
+ "futures",
+ "libp2p",
+ "tokio",
 ]
 
 [[package]]
