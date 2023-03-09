@@ -53,7 +53,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let store = MemoryStore::new(local_peer_id);
         let mut kademlia = Kademlia::new(local_peer_id, store);
 
-        let mut cfg_identify = libp2p::identify::Config::new("identify version 1".to_string(), key_copy.public());
+        let mut cfg_identify =
+            libp2p::identify::Config::new("identify version 1".to_string(), key_copy.public());
         let identify = libp2p::identify::Behaviour::new(cfg_identify);
 
         let mut behaviour = MyBehaviour { kademlia, identify };
@@ -82,7 +83,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 },
                 SwarmEvent::Behaviour(MyBehaviourEvent::Identify(libp2p::identify::Event::Received {peer_id, info: _})) => {
                     println!("New node identify.");
-                    for address in  swarm.behaviour_mut().addresses_of_peer(&peer_id) {
+                    for address in swarm.behaviour_mut().addresses_of_peer(&peer_id) {
                         swarm.behaviour_mut().kademlia.add_address(&peer_id, address);
                     }
                 },

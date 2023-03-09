@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-libp2p = { version = "0.50.0", features = ["tcp", "dns", "async-std", "noise", "mplex", "yamux", "websocket", "ping", "macros", "kad", "identify"] }
 futures = "0.3.25"
 async-std = { version = "1.12.0", features = ["attributes"] }
-tokio = { version = "1.0", features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread", "sync", "fs"] }
+libp2p = { version = "0.50.0", features = ["tokio", "async-std", "tcp", "dns", "macros", "kad", "identify", "noise", "mplex", "yamux", "websocket"] }
 chrono = "0.4.23"
 env_logger = "0.10.0"
+tokio = { version = "1.26.0", features = ["full"] }
