@@ -14,7 +14,7 @@ use libp2p::{
     PeerId,
 };
 
-use crate::constants::{DHT_ED_25529_KEYS_FILE_PATH, DHT_FOLDER_PATH, DHT_PEER_ID_FILE_PATH};
+use crate::constants::{DHT_ED_25529_KEYS_FILE_PATH, DHT_PEER_ID_FILE_PATH, NODE_ONE_ADDRESS};
 
 mod constants;
 
@@ -49,7 +49,6 @@ impl From<libp2p::identify::Event> for MyBehaviourEvent {
 
 #[async_std::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
-    init_folders();
     //We generate peer_id and keypair.
     if !Path::new(DHT_PEER_ID_FILE_PATH).exists()
         && !Path::new(DHT_ED_25529_KEYS_FILE_PATH).exists()
@@ -88,8 +87,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .bootstrap()
         .expect("Cant bootstrap");
 
-    //TODO: static id.
-    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
+    swarm.listen_on(NODE_ONE_ADDRESS.parse()?)?;
 
     loop {
         //TODO: delete this select and use just swarm.select_next_some().await
@@ -121,12 +119,6 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             _ => {}
             }
         }
-    }
-}
-
-fn init_folders() {
-    if !Path::new(DHT_FOLDER_PATH).exists() {
-        fs::create_dir(DHT_FOLDER_PATH).expect("Can't create folder dht.");
     }
 }
 
