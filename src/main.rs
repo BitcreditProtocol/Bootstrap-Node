@@ -1,18 +1,14 @@
 use std::error::Error;
 use std::path::Path;
-use std::{fs, mem};
+use std::{env, fs, mem};
 
 use futures::select;
 use futures::StreamExt;
 use libp2p::identity::Keypair;
 use libp2p::kad::record::store::MemoryStore;
 use libp2p::kad::{Kademlia, KademliaEvent};
-use libp2p::swarm::NetworkBehaviour;
-use libp2p::{
-    development_transport,
-    swarm::{Swarm, SwarmEvent},
-    PeerId,
-};
+use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
+use libp2p::{development_transport, swarm::{Swarm, SwarmEvent}, PeerId, tokio_development_transport};
 
 use crate::constants::{DHT_ED_25529_KEYS_FILE_PATH, DHT_PEER_ID_FILE_PATH, NODE_ONE_ADDRESS};
 
@@ -47,8 +43,9 @@ impl From<libp2p::identify::Event> for MyBehaviourEvent {
     }
 }
 
-#[async_std::main]
+#[tokio::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
+    env::set_var("RUST_BACKTRACE", "full");
     //We generate peer_id and keypair.
     if !Path::new(DHT_PEER_ID_FILE_PATH).exists()
         && !Path::new(DHT_ED_25529_KEYS_FILE_PATH).exists()
@@ -62,7 +59,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Local peer id: {local_peer_id:?}");
 
-    let transport = development_transport(local_key).await?;
+    let transport = tokio_development_transport(local_key).expect("Cant create transport");
 
     let mut swarm = {
         let store = MemoryStore::new(local_peer_id);
@@ -73,7 +70,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let identify = libp2p::identify::Behaviour::new(cfg_identify);
 
         let mut behaviour = MyBehaviour { kademlia, identify };
-        Swarm::with_async_std_executor(transport, behaviour, local_peer_id)
+        SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id).build()
     };
 
     swarm
