@@ -6,7 +6,7 @@ build = "build.rs"
 
 [dependencies]
 futures = "0.3.25"
-libp2p = { version = "0.51.3", features = ["tcp", "dns", "async-std", "noise", "mplex", "yamux", "websocket", "tokio", "macros", "kad", "request-response", "identify", "gossipsub", "quic"] }
+libp2p = { version = "0.51.3", features = ["tcp", "dns", "async-std", "autonat", "noise", "mplex", "yamux", "websocket", "tokio", "macros", "kad", "request-response", "identify", "gossipsub", "quic"] }
 chrono = "0.4.23"
 env_logger = "0.10.0"
 tokio = { version = "1.27.0", features = ["full"] }

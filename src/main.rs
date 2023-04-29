@@ -1,19 +1,25 @@
-use std::error::Error;
-use std::path::Path;
 use std::{env, fs, mem};
-use futures::future::Either;
+use std::error::Error;
+use std::net::Ipv4Addr;
+use std::path::Path;
 
+use futures::future::Either;
 use futures::select;
 use futures::StreamExt;
-use libp2p::identity::Keypair;
-use libp2p::kad::record::store::MemoryStore;
-use libp2p::kad::{Kademlia, KademliaEvent};
-use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
-use libp2p::{development_transport, swarm::{Swarm, SwarmEvent}, PeerId, tokio_development_transport, dns, quic, websocket, noise, yamux, tcp, Transport};
+use libp2p::{
+    autonat, development_transport, dns, identify, identity, Multiaddr, noise,
+    PeerId,
+    quic, swarm::{Swarm, SwarmEvent}, tcp, tokio_development_transport, Transport, websocket, yamux,
+};
 use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::core::transport::OrTransport;
 use libp2p::core::upgrade;
 use libp2p::core::upgrade::Version;
+use libp2p::identity::Keypair;
+use libp2p::kad::{Kademlia, KademliaEvent};
+use libp2p::kad::record::store::MemoryStore;
+use libp2p::multiaddr::Protocol;
+use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
 
 use crate::constants::{DHT_ED_25529_KEYS_FILE_PATH, DHT_PEER_ID_FILE_PATH, NODE_ONE_ADDRESS};
 
@@ -27,6 +33,26 @@ const BOOTNODES: &str = "QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt";
 struct MyBehaviour {
     kademlia: Kademlia<MemoryStore>,
     identify: libp2p::identify::Behaviour,
+    auto_nat: autonat::Behaviour,
+}
+
+impl MyBehaviour {
+    fn new(local_public_key: identity::PublicKey, local_peer_id: PeerId) -> Self {
+        Self {
+            kademlia: Kademlia::new(local_peer_id, MemoryStore::new(local_peer_id)),
+            identify: identify::Behaviour::new(identify::Config::new(
+                "/ipfs/0.1.0".into(),
+                local_public_key.clone(),
+            )),
+            auto_nat: autonat::Behaviour::new(
+                local_public_key.to_peer_id(),
+                autonat::Config {
+                    only_global_ips: false,
+                    ..Default::default()
+                },
+            ),
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -34,6 +60,7 @@ struct MyBehaviour {
 enum MyBehaviourEvent {
     Kademlia(KademliaEvent),
     Identify(libp2p::identify::Event),
+    AutoNat(autonat::Event),
 }
 
 impl From<KademliaEvent> for MyBehaviourEvent {
@@ -45,6 +72,12 @@ impl From<KademliaEvent> for MyBehaviourEvent {
 impl From<libp2p::identify::Event> for MyBehaviourEvent {
     fn from(event: libp2p::identify::Event) -> Self {
         MyBehaviourEvent::Identify(event)
+    }
+}
+
+impl From<autonat::Event> for MyBehaviourEvent {
+    fn from(v: autonat::Event) -> Self {
+        Self::AutoNat(v)
     }
 }
 
@@ -64,18 +97,18 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Local peer id: {local_peer_id:?}");
 
-    let tcp_transport = tcp::async_io::Transport::new(tcp::Config::default().nodelay(true))
-        .upgrade(upgrade::Version::V1Lazy)
-        .authenticate(noise::NoiseAuthenticated::xx(&local_key).unwrap())
-        .multiplex(yamux::YamuxConfig::default())
-        .timeout(std::time::Duration::from_secs(20))
-        .boxed();
-    let quic_transport = quic::tokio::Transport::new(quic::Config::new(&local_key));
-    let web_transport = websocket::WsConfig::new(
-        dns::DnsConfig::system(tcp::tokio::Transport::new(tcp::Config::default()))
-            .await
-            .unwrap(),
-    );
+    // let tcp_transport = tcp::async_io::Transport::new(tcp::Config::default().nodelay(true))
+    //     .upgrade(upgrade::Version::V1Lazy)
+    //     .authenticate(noise::NoiseAuthenticated::xx(&local_key).unwrap())
+    //     .multiplex(yamux::YamuxConfig::default())
+    //     .timeout(std::time::Duration::from_secs(20))
+    //     .boxed();
+    // let quic_transport = quic::tokio::Transport::new(quic::Config::new(&local_key));
+    // let web_transport = websocket::WsConfig::new(
+    //     dns::DnsConfig::system(tcp::tokio::Transport::new(tcp::Config::default()))
+    //         .await
+    //         .unwrap(),
+    // );
     // let transport = OrTransport::new(quic_transport, tcp_transport)
     //     .map(|either_output, _| match either_output {
     //         Either::Left((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
@@ -89,17 +122,9 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .multiplex(yamux::YamuxConfig::default())
         .boxed();
 
-    let mut swarm = {
-        let store = MemoryStore::new(local_peer_id);
-        let mut kademlia = Kademlia::new(local_peer_id, store);
+    let mut behaviour = MyBehaviour::new(key_copy.public(), local_peer_id.clone());
 
-        let mut cfg_identify =
-            libp2p::identify::Config::new("identify version 1".to_string(), key_copy.public());
-        let identify = libp2p::identify::Behaviour::new(cfg_identify);
-
-        let mut behaviour = MyBehaviour { kademlia, identify };
-        SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id).build()
-    };
+    let mut swarm = SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id).build();
 
     swarm
         .behaviour_mut()
@@ -112,7 +137,11 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .bootstrap()
         .expect("Cant bootstrap");
 
-    swarm.listen_on(NODE_ONE_ADDRESS.parse()?)?;
+    swarm.listen_on(
+        Multiaddr::empty()
+            .with(Protocol::Ip4(Ipv4Addr::new(0, 0, 0, 0)))
+            .with(Protocol::Tcp(0)),
+    )?;
 
     loop {
         //TODO: delete this select and use just swarm.select_next_some().await
