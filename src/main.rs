@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::path::Path;
 use std::{env, fs, mem};
+use futures::future::Either;
 
 use futures::select;
 use futures::StreamExt;
@@ -8,7 +9,11 @@ use libp2p::identity::Keypair;
 use libp2p::kad::record::store::MemoryStore;
 use libp2p::kad::{Kademlia, KademliaEvent};
 use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
-use libp2p::{development_transport, swarm::{Swarm, SwarmEvent}, PeerId, tokio_development_transport};
+use libp2p::{development_transport, swarm::{Swarm, SwarmEvent}, PeerId, tokio_development_transport, dns, quic, websocket, noise, yamux, tcp, Transport};
+use libp2p::core::muxing::StreamMuxerBox;
+use libp2p::core::transport::OrTransport;
+use libp2p::core::upgrade;
+use libp2p::core::upgrade::Version;
 
 use crate::constants::{DHT_ED_25529_KEYS_FILE_PATH, DHT_PEER_ID_FILE_PATH, NODE_ONE_ADDRESS};
 
@@ -59,7 +64,30 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Local peer id: {local_peer_id:?}");
 
-    let transport = tokio_development_transport(local_key).expect("Cant create transport");
+    let tcp_transport = tcp::async_io::Transport::new(tcp::Config::default().nodelay(true))
+        .upgrade(upgrade::Version::V1Lazy)
+        .authenticate(noise::NoiseAuthenticated::xx(&local_key).unwrap())
+        .multiplex(yamux::YamuxConfig::default())
+        .timeout(std::time::Duration::from_secs(20))
+        .boxed();
+    let quic_transport = quic::tokio::Transport::new(quic::Config::new(&local_key));
+    let web_transport = websocket::WsConfig::new(
+        dns::DnsConfig::system(tcp::tokio::Transport::new(tcp::Config::default()))
+            .await
+            .unwrap(),
+    );
+    // let transport = OrTransport::new(quic_transport, tcp_transport)
+    //     .map(|either_output, _| match either_output {
+    //         Either::Left((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
+    //         Either::Right((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
+    //     })
+    //     .boxed();
+
+    let transport = tcp::tokio::Transport::default()
+        .upgrade(Version::V1Lazy)
+        .authenticate(noise::NoiseAuthenticated::xx(&local_key).unwrap())
+        .multiplex(yamux::YamuxConfig::default())
+        .boxed();
 
     let mut swarm = {
         let store = MemoryStore::new(local_peer_id);
