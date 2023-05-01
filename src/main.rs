@@ -1,39 +1,114 @@
+use std::{fs, mem};
 use std::error::Error;
 use std::path::Path;
-use std::{env, fs, mem};
-use futures::future::Either;
 
-use futures::select;
 use futures::StreamExt;
-use libp2p::identity::Keypair;
-use libp2p::kad::record::store::MemoryStore;
-use libp2p::kad::{Kademlia, KademliaEvent};
-use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
-use libp2p::{development_transport, swarm::{Swarm, SwarmEvent}, PeerId, tokio_development_transport, dns, quic, websocket, noise, yamux, tcp, Transport};
-use libp2p::core::muxing::StreamMuxerBox;
-use libp2p::core::transport::OrTransport;
-use libp2p::core::upgrade;
+use libp2p::{identify, Multiaddr, noise, PeerId, relay, swarm::SwarmEvent, tcp, Transport, yamux};
 use libp2p::core::upgrade::Version;
+use libp2p::identity::Keypair;
+use libp2p::kad::{Kademlia, KademliaEvent};
+use libp2p::kad::record::store::MemoryStore;
+use libp2p::multiaddr::Protocol;
+use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
 
-use crate::constants::{DHT_ED_25529_KEYS_FILE_PATH, DHT_PEER_ID_FILE_PATH, NODE_ONE_ADDRESS};
+use crate::constants::{
+    DHT_ED_25529_KEYS_FILE_PATH, DHT_PEER_ID_FILE_PATH, IP_NODE_ONE, TCP_NODE_ONE,
+};
 
 mod constants;
 
 //Need to be able to run bootstrap.
 const BOOTNODES: &str = "QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt";
 
+#[tokio::main]
+pub async fn main() -> Result<(), Box<dyn Error>> {
+    if !Path::new(DHT_PEER_ID_FILE_PATH).exists()
+        && !Path::new(DHT_ED_25529_KEYS_FILE_PATH).exists()
+    {
+        generate_dht_logic();
+    }
+
+    let local_public_key = read_ed25519_keypair_from_file();
+    let local_peer_id = read_peer_id_from_file();
+    println!("Local peer id: {local_peer_id:?}");
+
+    let transport = tcp::tokio::Transport::default()
+        .upgrade(Version::V1Lazy)
+        .authenticate(noise::NoiseAuthenticated::xx(&local_public_key).unwrap())
+        .multiplex(yamux::YamuxConfig::default())
+        .timeout(std::time::Duration::from_secs(20))
+        .boxed();
+
+    let behaviour = MyBehaviour::new(local_peer_id.clone(), local_public_key.clone());
+
+    let mut swarm =
+        SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id.clone()).build();
+
+    swarm.behaviour_mut().bootstrap_kademlia();
+
+    swarm
+        .listen_on(
+            Multiaddr::empty()
+                .with(Protocol::Ip4(IP_NODE_ONE))
+                .with(Protocol::Tcp(TCP_NODE_ONE)),
+        )
+        .expect("Can't listen on this address");
+
+    loop {
+        match swarm.next().await.expect("Infinite Stream.") {
+            SwarmEvent::NewListenAddr { address, .. } => {
+                println!("Listening in {address:?}")
+            }
+            SwarmEvent::Behaviour(event) => {
+                println!("{event:?}")
+            }
+            _ => {}
+        }
+    }
+}
+
 #[derive(NetworkBehaviour)]
 #[behaviour(out_event = "MyBehaviourEvent")]
 struct MyBehaviour {
     kademlia: Kademlia<MemoryStore>,
-    identify: libp2p::identify::Behaviour,
+    identify: identify::Behaviour,
+    relay: relay::Behaviour,
+}
+
+impl MyBehaviour {
+    fn new(local_peer_id: PeerId, local_public_key: Keypair) -> Self {
+        Self {
+            kademlia: {
+                let store = MemoryStore::new(local_peer_id);
+                Kademlia::new(local_peer_id, store)
+            },
+            identify: {
+                let cfg_identify =
+                    identify::Config::new("/identify/0.1.0".to_string(), local_public_key.public());
+                identify::Behaviour::new(cfg_identify)
+            },
+            relay: { relay::Behaviour::new(local_peer_id, Default::default()) },
+        }
+    }
+
+    fn bootstrap_kademlia(&mut self) {
+        self.kademlia.add_address(
+            &BOOTNODES.parse().expect("Can't parse bootstrap node id."),
+            "/dnsaddr/bootstrap.libp2p.io"
+                .parse()
+                .expect("Can't parse bootstrap node address."),
+        );
+
+        self.kademlia.bootstrap().expect("Cant bootstrap");
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 enum MyBehaviourEvent {
     Kademlia(KademliaEvent),
-    Identify(libp2p::identify::Event),
+    Identify(identify::Event),
+    Relay(relay::Event),
 }
 
 impl From<KademliaEvent> for MyBehaviourEvent {
@@ -42,108 +117,15 @@ impl From<KademliaEvent> for MyBehaviourEvent {
     }
 }
 
-impl From<libp2p::identify::Event> for MyBehaviourEvent {
-    fn from(event: libp2p::identify::Event) -> Self {
+impl From<identify::Event> for MyBehaviourEvent {
+    fn from(event: identify::Event) -> Self {
         MyBehaviourEvent::Identify(event)
     }
 }
 
-#[tokio::main]
-pub async fn main() -> Result<(), Box<dyn Error>> {
-    env::set_var("RUST_BACKTRACE", "full");
-    //We generate peer_id and keypair.
-    if !Path::new(DHT_PEER_ID_FILE_PATH).exists()
-        && !Path::new(DHT_ED_25529_KEYS_FILE_PATH).exists()
-    {
-        generate_dht_logic();
-    }
-
-    let local_key = read_ed25519_keypair_from_file();
-    let key_copy = local_key.clone();
-    let local_peer_id = read_peer_id_from_file();
-
-    println!("Local peer id: {local_peer_id:?}");
-
-    let tcp_transport = tcp::async_io::Transport::new(tcp::Config::default().nodelay(true))
-        .upgrade(upgrade::Version::V1Lazy)
-        .authenticate(noise::NoiseAuthenticated::xx(&local_key).unwrap())
-        .multiplex(yamux::YamuxConfig::default())
-        .timeout(std::time::Duration::from_secs(20))
-        .boxed();
-    let quic_transport = quic::tokio::Transport::new(quic::Config::new(&local_key));
-    let web_transport = websocket::WsConfig::new(
-        dns::DnsConfig::system(tcp::tokio::Transport::new(tcp::Config::default()))
-            .await
-            .unwrap(),
-    );
-    // let transport = OrTransport::new(quic_transport, tcp_transport)
-    //     .map(|either_output, _| match either_output {
-    //         Either::Left((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
-    //         Either::Right((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
-    //     })
-    //     .boxed();
-
-    let transport = tcp::tokio::Transport::default()
-        .upgrade(Version::V1Lazy)
-        .authenticate(noise::NoiseAuthenticated::xx(&local_key).unwrap())
-        .multiplex(yamux::YamuxConfig::default())
-        .boxed();
-
-    let mut swarm = {
-        let store = MemoryStore::new(local_peer_id);
-        let mut kademlia = Kademlia::new(local_peer_id, store);
-
-        let mut cfg_identify =
-            libp2p::identify::Config::new("identify version 1".to_string(), key_copy.public());
-        let identify = libp2p::identify::Behaviour::new(cfg_identify);
-
-        let mut behaviour = MyBehaviour { kademlia, identify };
-        SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id).build()
-    };
-
-    swarm
-        .behaviour_mut()
-        .kademlia
-        .add_address(&BOOTNODES.parse()?, "/dnsaddr/bootstrap.libp2p.io".parse()?);
-
-    swarm
-        .behaviour_mut()
-        .kademlia
-        .bootstrap()
-        .expect("Cant bootstrap");
-
-    swarm.listen_on(NODE_ONE_ADDRESS.parse()?)?;
-
-    loop {
-        //TODO: delete this select and use just swarm.select_next_some().await
-        select! {
-        event = swarm.select_next_some() => match event {
-                SwarmEvent::NewListenAddr { address, .. } => {
-                    println!("Listening in {address:?}")
-                },
-                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(libp2p::identify::Event::Received {peer_id, info: _})) => {
-                    println!("New node identify.");
-                    for address in swarm.behaviour_mut().addresses_of_peer(&peer_id) {
-                        swarm.behaviour_mut().kademlia.add_address(&peer_id, address);
-                    }
-                },
-                SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(KademliaEvent::RoutingUpdated { peer, addresses, is_new_peer: _, bucket_range: _, old_peer: _ })) => {
-                    println!("RoutingUpdated");
-                    swarm.behaviour_mut().identify.push(std::iter::once(peer));
-                    println!("{peer:?}");
-                    println!("{addresses:?}")
-                },
-                SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(KademliaEvent::UnroutablePeer { peer })) => {
-                    println!("UnroutablePeer");
-                    println!("{peer:?}")
-                },
-                SwarmEvent::Behaviour(event) => {
-                    println!("New event");
-                    println!("{event:?}")
-                },
-            _ => {}
-            }
-        }
+impl From<relay::Event> for MyBehaviourEvent {
+    fn from(event: relay::Event) -> Self {
+        MyBehaviourEvent::Relay(event)
     }
 }
 
