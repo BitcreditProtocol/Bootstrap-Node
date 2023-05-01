@@ -44,8 +44,6 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let mut swarm =
         SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id.clone()).build();
 
-    swarm.behaviour_mut().bootstrap_kademlia();
-
     swarm
         .listen_on(
             Multiaddr::empty()
@@ -53,6 +51,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 .with(Protocol::Tcp(TCP_NODE_ONE)),
         )
         .expect("Can't listen on this address");
+
+    swarm.behaviour_mut().bootstrap_kademlia();
 
     loop {
         match swarm.next().await.expect("Infinite Stream.") {
