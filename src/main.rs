@@ -1,15 +1,18 @@
-use std::{fs, mem};
 use std::error::Error;
 use std::path::Path;
+use std::{fs, mem};
 
 use futures::StreamExt;
-use libp2p::{identify, Multiaddr, noise, PeerId, relay, swarm::SwarmEvent, tcp, Transport, yamux};
 use libp2p::core::upgrade::Version;
+use libp2p::gossipsub::TopicHash;
 use libp2p::identity::Keypair;
-use libp2p::kad::{Kademlia, KademliaEvent};
 use libp2p::kad::record::store::MemoryStore;
+use libp2p::kad::{Kademlia, KademliaEvent};
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
+use libp2p::{
+    gossipsub, identify, noise, relay, swarm::SwarmEvent, tcp, yamux, Multiaddr, PeerId, Transport,
+};
 
 use crate::constants::{
     DHT_ED_25529_KEYS_FILE_PATH, DHT_PEER_ID_FILE_PATH, IP_NODE_ONE, TCP_NODE_ONE,
@@ -39,10 +42,9 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .timeout(std::time::Duration::from_secs(20))
         .boxed();
 
-    let behaviour = MyBehaviour::new(local_peer_id.clone(), local_public_key.clone());
+    let behaviour = MyBehaviour::new(local_peer_id, local_public_key.clone());
 
-    let mut swarm =
-        SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id.clone()).build();
+    let mut swarm = SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id).build();
 
     swarm
         .listen_on(
@@ -59,6 +61,23 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             SwarmEvent::NewListenAddr { address, .. } => {
                 println!("Listening in {address:?}")
             }
+            SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed {
+                topic,
+                ..
+            })) => {
+                let beh = swarm.behaviour_mut();
+                if !beh
+                    .gossipsub
+                    .topics()
+                    .collect::<Vec<&TopicHash>>()
+                    .contains(&&topic)
+                {
+                    println!("Subscribed to {topic:?}");
+                    beh.gossipsub
+                        .subscribe(&gossipsub::IdentTopic::new(topic.to_string()))
+                        .expect("Can't subscribe to topic.");
+                }
+            }
             SwarmEvent::Behaviour(event) => {
                 println!("{event:?}")
             }
@@ -73,6 +92,7 @@ struct MyBehaviour {
     kademlia: Kademlia<MemoryStore>,
     identify: identify::Behaviour,
     relay: relay::Behaviour,
+    gossipsub: gossipsub::Behaviour,
 }
 
 impl MyBehaviour {
@@ -88,6 +108,12 @@ impl MyBehaviour {
                 identify::Behaviour::new(cfg_identify)
             },
             relay: { relay::Behaviour::new(local_peer_id, Default::default()) },
+            gossipsub: {
+                let gossipsub_config = gossipsub::Config::default();
+                let message_authenticity = gossipsub::MessageAuthenticity::Signed(local_public_key);
+                gossipsub::Behaviour::new(message_authenticity, gossipsub_config)
+                    .expect("Correct configuration")
+            },
         }
     }
 
@@ -109,6 +135,7 @@ enum MyBehaviourEvent {
     Kademlia(KademliaEvent),
     Identify(identify::Event),
     Relay(relay::Event),
+    Gossipsub(gossipsub::Event),
 }
 
 impl From<KademliaEvent> for MyBehaviourEvent {
@@ -126,6 +153,12 @@ impl From<identify::Event> for MyBehaviourEvent {
 impl From<relay::Event> for MyBehaviourEvent {
     fn from(event: relay::Event) -> Self {
         MyBehaviourEvent::Relay(event)
+    }
+}
+
+impl From<gossipsub::Event> for MyBehaviourEvent {
+    fn from(event: gossipsub::Event) -> Self {
+        MyBehaviourEvent::Gossipsub(event)
     }
 }
 
